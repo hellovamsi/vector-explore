@@ -7,6 +7,7 @@ import numpy as np
 from .sentences import split_sentences
 from .overlap import apply_sentence_overlap
 from ..embeddings.base import Embedder
+from ..batching import batched_embed_texts
 
 
 @dataclass(frozen=True)
@@ -24,7 +25,14 @@ def _cosine(a: np.ndarray, b: np.ndarray) -> float:
     return float(np.dot(a, b) / (na * nb))
 
 
-def chunk_semantic(text: str, params: SemanticChunkParams, embedder: Embedder) -> list[dict]:
+def chunk_semantic(
+    text: str,
+    params: SemanticChunkParams,
+    embedder: Embedder,
+    *,
+    embed_batch_size: int = 64,
+    progress_enabled: bool = True,
+) -> list[dict]:
     sents = split_sentences(text)
     if not sents:
         return []
@@ -34,7 +42,13 @@ def chunk_semantic(text: str, params: SemanticChunkParams, embedder: Embedder) -
     thr = float(params.similarity_drop_threshold)
 
     # Embed per-sentence to detect boundaries.
-    sent_vecs = embedder.embed_texts(sents)
+    sent_vecs = batched_embed_texts(
+        embedder=embedder,
+        texts=sents,
+        batch_size=embed_batch_size,
+        progress_enabled=progress_enabled,
+        description="Embedding sentences for semantic boundaries",
+    )
     sent_vecs_np = [np.asarray(v, dtype=np.float32) for v in sent_vecs]
 
     chunks: list[tuple[int, int, str, list[str], str]] = []

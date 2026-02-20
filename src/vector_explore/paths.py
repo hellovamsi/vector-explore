@@ -11,37 +11,59 @@ from typing import Any
 class RunPaths:
     project_root: Path
     data_dir: Path
-    runs_dir: Path
 
 
 def default_paths(project_root: Path) -> RunPaths:
     return RunPaths(
         project_root=project_root,
         data_dir=project_root / "data",
-        runs_dir=project_root / "runs",
     )
 
 
-def chunk_run_dir(runs_dir: Path, *, novel_slug: str, chunk_method: str) -> Path:
-    return runs_dir / novel_slug / chunk_method
+_RESERVED_NOVEL_DIRS = {"src", "tests", "docs", "data", "runs", ".venv"}
 
 
-def embed_run_dir(runs_dir: Path, *, novel_slug: str, chunk_method: str, embed_backend: str, embed_model: str) -> Path:
-    return runs_dir / novel_slug / chunk_method / f"{embed_backend}-{_sanitize(embed_model)}"
+def novel_root(project_root: Path, novel_slug: str) -> Path:
+    slug = novel_slug.strip()
+    if not slug:
+        raise ValueError("novel_slug must be non-empty.")
+    if slug in _RESERVED_NOVEL_DIRS:
+        raise ValueError(f"novel_slug '{slug}' is reserved.")
+    return project_root / slug
 
 
-def store_run_dir(
-    runs_dir: Path, *, novel_slug: str, chunk_method: str, embed_backend: str, embed_model: str, store_name: str
-) -> Path:
-    return embed_run_dir(runs_dir, novel_slug=novel_slug, chunk_method=chunk_method, embed_backend=embed_backend, embed_model=embed_model) / store_name
+def chunk_dir(project_root: Path, *, novel_slug: str, chunk_method: str) -> Path:
+    return novel_root(project_root, novel_slug) / chunk_method
 
 
-def query_dir(store_dir: Path, query_hash: str) -> Path:
-    return store_dir / "queries" / query_hash
+def embed_key(embed_backend: str, embed_model: str) -> str:
+    return f"{embed_backend}-{_sanitize(embed_model)}"
 
 
-def query_hash(question: str, params: dict[str, Any]) -> str:
+def embedding_dir(project_root: Path, *, novel_slug: str, embed_key: str, chunk_method: str) -> Path:
+    return novel_root(project_root, novel_slug) / embed_key / chunk_method
+
+
+def index_key(chunk_method: str, embed_key: str) -> str:
+    return f"{chunk_method}__{embed_key}"
+
+
+def store_index_dir(project_root: Path, *, novel_slug: str, store_name: str, index_key: str) -> Path:
+    return novel_root(project_root, novel_slug) / store_name / index_key
+
+
+def queries_root(project_root: Path, *, novel_slug: str) -> Path:
+    return novel_root(project_root, novel_slug) / "queries"
+
+
+def query_dir(project_root: Path, *, novel_slug: str, query_hash: str) -> Path:
+    return queries_root(project_root, novel_slug=novel_slug) / query_hash
+
+
+def query_hash(question: str, params: dict[str, Any], config: dict[str, Any] | None = None) -> str:
     payload = {"question": question, "params": params}
+    if config is not None:
+        payload["config"] = config
     return sha256_bytes(json_dumps_canonical(payload).encode("utf-8"))[:16]
 
 
