@@ -112,3 +112,11 @@ Per query:
 - `llm_summary_input.json`, `llm_summary_output.json` (when vector summary is enabled)
 
 See `docs/interfaces.md` for schemas.
+
+## Reusing Previous Runs
+The wizard now scans `runs/` for query-ready indexes and shows the most recent entries first (up to 10).
+
+If you select one of those previous runs, the wizard skips download/chunk/embed/index and jumps straight to query with the saved embedding backend/model and store settings.
+
+Run artifacts are organized under:
+- `runs/<novel_slug>/<chunk_method>/<embed_backend>-<sanitized_model>/<store_name>/...`
