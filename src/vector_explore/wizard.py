@@ -13,7 +13,7 @@ from .embeddings.st_embed import SentenceTransformersEmbedder
 from .indexing import IndexParams, index_embeddings
 from .io_utils import iter_jsonl
 from .paging import page_iterable, page_vector_preview, prompt_more
-from .paths import embed_key
+from .paths import default_paths, embed_key
 from .query import QueryParams, run_query
 from .runs_inspect import IndexedRunSummary, discover_indexed_runs
 
@@ -58,6 +58,11 @@ def run_wizard(
                 try:
                     embedder = _embedder_from_saved(run.embed_backend, run.embed_model, env)
                     run_query_stage(
+                        project_root=project_root,
+                        novel_slug=run.novel_slug,
+                        chunk_method=run.chunk_method,
+                        embed_key_value=embed_key(run.embed_backend, run.embed_model),
+                        store_name=run.store,
                         store_dir=run.store_dir,
                         embedder=embedder,
                         env=env,
@@ -117,7 +122,7 @@ def run_wizard(
         embedder = _select_embedder(env, purpose="chunk embeddings (index + query)")
     else:
         if not prompt_more(input, prompt="Reuse the same embedding backend/model for indexing? [Enter=yes, N+Enter=no]: "):
-            embedder = _select_embedder(project_root, env, purpose="chunk embeddings (index + query)")
+            embedder = _select_embedder(env, purpose="chunk embeddings (index + query)")
 
     embed_out_dir = embed_chunks(
         project_root=project_root,
@@ -151,7 +156,7 @@ def run_wizard(
         print("Pinecone: ensure PINECONE_API_KEY and PINECONE_INDEX are set in .env.")
 
     ekey = embed_key(embedder.info().backend, embedder.info().model)
-    index_embeddings(
+    store_dir = index_embeddings(
         project_root=project_root,
         novel_slug=novel.slug,
         chunk_method=method,
@@ -165,6 +170,11 @@ def run_wizard(
     )
 
     run_query_stage(
+        project_root=project_root,
+        novel_slug=novel.slug,
+        chunk_method=method,
+        embed_key_value=ekey,
+        store_name=store,
         store_dir=store_dir,
         embedder=embedder,
         env=env,
@@ -176,6 +186,11 @@ def run_wizard(
 
 def run_query_stage(
     *,
+    project_root: Path,
+    novel_slug: str,
+    chunk_method: str,
+    embed_key_value: str,
+    store_name: str,
     store_dir: Path,
     embedder: Embedder,
     env: Env,
@@ -183,6 +198,21 @@ def run_query_stage(
     print_fn=print,
     initial_query_params: QueryParams,
 ) -> None:
+    def _run_query_from_store_dir(*, question: str, embedder: Embedder, env: Env, params: QueryParams, input_fn=input, print_fn=print, **_kwargs):
+        return run_query(
+            project_root=project_root,
+            novel_slug=novel_slug,
+            chunk_method=chunk_method,
+            embed_key=embed_key_value,
+            store_name=store_name,
+            question=question,
+            embedder=embedder,
+            env=env,
+            params=params,
+            input_fn=input_fn,
+            print_fn=print_fn,
+        )
+
     run_query_menu(
         store_dir=store_dir,
         embedder=embedder,
@@ -190,7 +220,7 @@ def run_query_stage(
         input_fn=input_fn,
         print_fn=print_fn,
         initial_query_params=initial_query_params,
-        run_query_fn=run_query,
+        run_query_fn=_run_query_from_store_dir,
     )
 
 

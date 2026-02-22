@@ -43,25 +43,29 @@ def test_discover_indexed_runs_filters_and_sorts(tmp_path: Path):
     _make_query_artifact(newer, "q_new", ts=base + 500)
 
     # Invalid: missing embed_params.json
-    bad_no_embed = runs_dir / "pride" / "sentences" / "st-model-x" / "lancedb"
+    bad_no_embed = runs_dir / "pride" / "lancedb" / "sentences__st-model-x"
     bad_no_embed.mkdir(parents=True, exist_ok=True)
     write_json(bad_no_embed / "store_params.json", {"params": {"store": "lancedb", "table_or_collection": "chunks"}})
     write_json(bad_no_embed / "store_meta.json", {"vector_dim": 384, "count": 9})
-    (bad_no_embed / "lancedb").mkdir(parents=True, exist_ok=True)
+    (bad_no_embed / "chunks.lance").mkdir(parents=True, exist_ok=True)
 
     # Invalid: missing store_meta.json
-    bad_no_meta = runs_dir / "pride" / "fixed" / "ollama-test" / "lancedb"
+    bad_no_meta = runs_dir / "pride" / "lancedb" / "fixed__ollama-test"
     bad_no_meta.mkdir(parents=True, exist_ok=True)
     write_json(bad_no_meta / "store_params.json", {"params": {"store": "lancedb", "table_or_collection": "chunks"}})
-    write_json(bad_no_meta.parent / "embed_params.json", {"params": {"backend": "ollama", "model": "test"}})
-    (bad_no_meta / "lancedb").mkdir(parents=True, exist_ok=True)
+    bad_no_meta_embed = runs_dir / "pride" / "ollama-test" / "fixed" / "embed_params.json"
+    bad_no_meta_embed.parent.mkdir(parents=True, exist_ok=True)
+    write_json(bad_no_meta_embed, {"params": {"backend": "ollama", "model": "test"}})
+    (bad_no_meta / "chunks.lance").mkdir(parents=True, exist_ok=True)
 
-    # Invalid: lancedb missing lancedb/ folder
-    bad_lancedb_missing_dir = runs_dir / "pride" / "fixed" / "st-model-z" / "lancedb"
+    # Invalid: lancedb missing chunks.lance/ folder
+    bad_lancedb_missing_dir = runs_dir / "pride" / "lancedb" / "fixed__st-model-z"
     bad_lancedb_missing_dir.mkdir(parents=True, exist_ok=True)
     write_json(bad_lancedb_missing_dir / "store_params.json", {"params": {"store": "lancedb", "table_or_collection": "chunks"}})
     write_json(bad_lancedb_missing_dir / "store_meta.json", {"vector_dim": 384, "count": 8})
-    write_json(bad_lancedb_missing_dir.parent / "embed_params.json", {"params": {"backend": "st", "model": "model-z"}})
+    bad_lancedb_embed = runs_dir / "pride" / "st-model-z" / "fixed" / "embed_params.json"
+    bad_lancedb_embed.parent.mkdir(parents=True, exist_ok=True)
+    write_json(bad_lancedb_embed, {"params": {"backend": "st", "model": "model-z"}})
 
     found = discover_indexed_runs(runs_dir)
     assert len(found) == 2
@@ -96,6 +100,29 @@ def test_discover_indexed_runs_limit(tmp_path: Path):
     assert found[-1].novel_slug == "novel2"
 
 
+def test_discover_indexed_runs_current_runs_layout(tmp_path: Path):
+    runs_dir = tmp_path / "runs"
+    base = time.time() - 1000
+    _make_valid_run(
+        runs_dir=runs_dir,
+        novel_slug="mobydick",
+        chunk_method="semantic",
+        embed_backend="ollama",
+        embed_model="qwen3-embedding:0.6b",
+        store="lancedb",
+        table="chunks",
+        namespace=None,
+        vector_dim=384,
+        count=1589,
+        ts=base,
+    )
+    found = discover_indexed_runs(runs_dir)
+    assert len(found) == 1
+    assert found[0].novel_slug == "mobydick"
+    assert found[0].chunk_method == "semantic"
+    assert found[0].store == "lancedb"
+
+
 def _make_valid_run(
     *,
     runs_dir: Path,
@@ -110,18 +137,23 @@ def _make_valid_run(
     count: int,
     ts: float,
 ) -> Path:
-    store_dir = runs_dir / novel_slug / chunk_method / f"{embed_backend}-{embed_model.replace('/', '_')}" / store
+    ekey = f"{embed_backend}-{embed_model.replace('/', '_').replace(':', '_')}"
+    store_dir = runs_dir / novel_slug / store / f"{chunk_method}__{ekey}"
+    embed_params_path = runs_dir / novel_slug / ekey / chunk_method / "embed_params.json"
+    chunk_params_path = runs_dir / novel_slug / chunk_method / "chunk_params.json"
     store_dir.mkdir(parents=True, exist_ok=True)
-    write_json(store_dir.parent / "embed_params.json", {"params": {"backend": embed_backend, "model": embed_model}})
-    write_json(store_dir.parent.parent / "chunk_params.json", {"params": {"target_chars": 900, "overlap_sentences": 2}})
+    embed_params_path.parent.mkdir(parents=True, exist_ok=True)
+    chunk_params_path.parent.mkdir(parents=True, exist_ok=True)
+    write_json(embed_params_path, {"params": {"backend": embed_backend, "model": embed_model}})
+    write_json(chunk_params_path, {"params": {"target_chars": 900, "overlap_sentences": 2}})
     write_json(store_dir / "store_params.json", {"params": {"store": store, "table_or_collection": table, "namespace": namespace}})
     write_json(store_dir / "store_meta.json", {"vector_dim": vector_dim, "count": count, "store": store})
     if store == "lancedb":
-        (store_dir / "lancedb").mkdir(parents=True, exist_ok=True)
+        (store_dir / "chunks.lance").mkdir(parents=True, exist_ok=True)
 
     for path in [
-        store_dir.parent / "embed_params.json",
-        store_dir.parent.parent / "chunk_params.json",
+        embed_params_path,
+        chunk_params_path,
         store_dir / "store_params.json",
         store_dir / "store_meta.json",
     ]:
@@ -130,7 +162,8 @@ def _make_valid_run(
 
 
 def _make_query_artifact(store_dir: Path, query_id: str, *, ts: float) -> None:
-    qdir = store_dir / "queries" / query_id
+    novel_dir = store_dir.parent.parent
+    qdir = novel_dir / "queries" / query_id
     qdir.mkdir(parents=True, exist_ok=True)
     answer_path = qdir / "answer.md"
     answer_path.write_text("answer\n", encoding="utf-8")
