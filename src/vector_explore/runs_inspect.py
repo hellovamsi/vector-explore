@@ -6,6 +6,8 @@ from typing import Any
 
 from .paths import read_json
 
+_STORE_NAMES = {"lancedb", "qdrant", "pinecone"}
+
 
 @dataclass(frozen=True)
 class IndexedRunSummary:
@@ -36,13 +38,18 @@ def discover_indexed_runs(runs_dir: Path, *, limit: int = 10) -> list[IndexedRun
         if not store_params_path.exists():
             continue
 
-        embed_dir = store_dir.parent
-        chunk_dir = embed_dir.parent
-        novel_dir = chunk_dir.parent
-        if novel_dir == chunk_dir:
+        try:
+            store_params = read_json(store_params_path)
+            store_meta = read_json(meta_path)
+        except Exception:
             continue
 
-        embed_params_path = embed_dir / "embed_params.json"
+        context = _resolve_current_layout_context(store_dir=store_dir, store_params=store_params)
+        if context is None:
+            continue
+
+        novel_dir, chunk_method, embed_key_value, store_name, query_dir = context
+        embed_params_path = novel_dir / embed_key_value / chunk_method / "embed_params.json"
         try:
             embed_params = read_json(embed_params_path)
         except Exception:
@@ -53,18 +60,11 @@ def discover_indexed_runs(runs_dir: Path, *, limit: int = 10) -> list[IndexedRun
         if not embed_backend or not embed_model:
             continue
 
-        try:
-            store_params = read_json(store_params_path)
-            store_meta = read_json(meta_path)
-        except Exception:
-            continue
-
-        store_name = _param_value(store_params, "store") or store_dir.name
-        if store_name == "lancedb" and not (store_dir / "lancedb").exists():
+        if store_name == "lancedb" and not ((store_dir / "chunks.lance").exists() or (store_dir / "lancedb").exists()):
             continue
 
         chunk_params: dict[str, Any] | None = None
-        chunk_params_path = chunk_dir / "chunk_params.json"
+        chunk_params_path = novel_dir / chunk_method / "chunk_params.json"
         if chunk_params_path.exists():
             try:
                 raw_chunk_params = read_json(chunk_params_path)
@@ -74,7 +74,6 @@ def discover_indexed_runs(runs_dir: Path, *, limit: int = 10) -> list[IndexedRun
             except Exception:
                 chunk_params = None
 
-        query_dir = store_dir / "queries"
         queries_count = 0
         if query_dir.exists():
             queries_count = len([p for p in query_dir.iterdir() if p.is_dir()])
@@ -97,7 +96,7 @@ def discover_indexed_runs(runs_dir: Path, *, limit: int = 10) -> list[IndexedRun
             IndexedRunSummary(
                 store_dir=store_dir,
                 novel_slug=novel_dir.name,
-                chunk_method=chunk_dir.name,
+                chunk_method=chunk_method,
                 chunk_params=chunk_params,
                 embed_backend=embed_backend,
                 embed_model=embed_model,
@@ -114,6 +113,26 @@ def discover_indexed_runs(runs_dir: Path, *, limit: int = 10) -> list[IndexedRun
 
     out.sort(key=lambda r: r.last_activity_ts, reverse=True)
     return out[:limit]
+
+
+def _resolve_current_layout_context(
+    *,
+    store_dir: Path,
+    store_params: dict[str, Any],
+) -> tuple[Path, str, str, str, Path] | None:
+    store_name = _param_value(store_params, "store") or store_dir.parent.name
+
+    # Canonical layout:
+    #   <runs>/<novel>/<store>/<chunk_method>__<embed_key>/
+    #   <runs>/<novel>/<embed_key>/<chunk_method>/embed_params.json
+    #   <runs>/<novel>/<chunk_method>/chunk_params.json
+    #   <runs>/<novel>/queries/<query_hash>/
+    if store_name in _STORE_NAMES and store_dir.parent.name == store_name and "__" in store_dir.name:
+        novel_dir = store_dir.parent.parent
+        idx_key = store_dir.name
+        chunk_method, embed_key_value = idx_key.split("__", 1)
+        return (novel_dir, chunk_method, embed_key_value, store_name, novel_dir / "queries")
+    return None
 
 
 def _compute_last_activity_ts(*, files: list[Path | None], query_dir: Path | None) -> float:

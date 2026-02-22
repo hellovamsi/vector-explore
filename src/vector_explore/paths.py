@@ -11,12 +11,14 @@ from typing import Any
 class RunPaths:
     project_root: Path
     data_dir: Path
+    runs_dir: Path
 
 
 def default_paths(project_root: Path) -> RunPaths:
     return RunPaths(
         project_root=project_root,
         data_dir=project_root / "data",
+        runs_dir=project_root / "runs",
     )
 
 
@@ -29,7 +31,7 @@ def novel_root(project_root: Path, novel_slug: str) -> Path:
         raise ValueError("novel_slug must be non-empty.")
     if slug in _RESERVED_NOVEL_DIRS:
         raise ValueError(f"novel_slug '{slug}' is reserved.")
-    return project_root / slug
+    return default_paths(project_root).runs_dir / slug
 
 
 def chunk_dir(project_root: Path, *, novel_slug: str, chunk_method: str) -> Path:
