@@ -17,6 +17,7 @@ An educational, local-first CLI tool to learn how **chunking**, **embeddings**, 
   - vector DB request parameters
   - retrieved raw vectors (paged)
   - **Vector→Text approximation (lossy)**: nearest-neighbor reconstruction + extracted keywords
+  - LLM input/output capture for Ollama answer/summary calls (`llm_*_input.json`, `llm_*_output.json`)
 - Generate an answer using a local LLM (default: Ollama `mistral:7b`) with chunk-id citations.
 
 ## Setup (required)
@@ -85,17 +86,30 @@ vector-explore
 - `vector-explore wizard`
 - `vector-explore download --novel frankenstein`
 - `vector-explore chunk --novel frankenstein --method fixed`
-- `vector-explore embed --novel frankenstein --method fixed --input runs/.../chunks.jsonl --backend st`
-- `vector-explore index --novel frankenstein --method fixed --embed-backend st --embed-model sentence-transformers/all-MiniLM-L6-v2 --input runs/.../embeddings.jsonl --store lancedb`
+- `vector-explore embed --novel frankenstein --method fixed --input frankenstein/fixed/chunks.jsonl --backend st`
+- `vector-explore index --novel frankenstein --method fixed --embed-backend st --embed-model sentence-transformers/all-MiniLM-L6-v2 --input frankenstein/st-sentence-transformers_all-MiniLM-L6-v2/fixed/embeddings.jsonl --store lancedb`
 - `vector-explore query --novel frankenstein --method fixed --embed-backend st --embed-model sentence-transformers/all-MiniLM-L6-v2 --store lancedb --question "What are the major themes?"`
+- `vector-explore migrate-layout --dry-run`
 
 ## Outputs
-Artifacts are written under `runs/` and are cached by input checksum + parameters:
+Artifacts are written under novel-rooted directories and are cached by input checksum + parameters:
+- `<novel_slug>/<chunk_method>/...`
+- `<novel_slug>/<embed_key>/<chunk_method>/...`
+- `<novel_slug>/<store_name>/<chunk_method>__<embed_key>/...`
+- `<novel_slug>/queries/<query_hash>/...`
+
+Top-level layout rationale:
+- Keep all work for a novel under one folder.
+- Separate chunk methods, embedding models, and store indexes to avoid collisions.
+
+Per query:
 - `chunks.jsonl`
 - `embeddings.jsonl`
 - `retrieval.jsonl`
 - `vector_to_text.json`
 - `answer.md`
+- `llm_answer_input.json`, `llm_answer_output.json`
+- `llm_summary_input.json`, `llm_summary_output.json` (when vector summary is enabled)
 
 See `docs/interfaces.md` for schemas.
 

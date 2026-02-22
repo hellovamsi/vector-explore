@@ -13,6 +13,7 @@ authors = [{ name = "Vector Explore" }]
 dependencies = [
   "numpy>=1.26",
   "python-dotenv>=1.0",
+  "rich>=13.7.0",
 ]
 
 [project.optional-dependencies]

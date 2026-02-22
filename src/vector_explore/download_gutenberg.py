@@ -33,27 +33,31 @@ def gutenberg_path(project_root: Path, novel_slug: str) -> Path:
     return project_root / "data" / "gutenberg" / f"{novel_slug}.txt"
 
 
-def download_if_missing(project_root: Path, novel: Novel, *, print_fn=print) -> Path:
+def download_if_missing(project_root: Path, novel: Novel, *, progress_enabled: bool = True, print_fn=print) -> Path:
     dst = gutenberg_path(project_root, novel.slug)
     ensure_dir(dst.parent)
     if dst.exists():
-        print_fn(f"Checking local cache: {dst} …")
+        print_fn(f"Checking local cache: {dst} ...")
         print_fn("Found. Skipping download.")
         return dst
 
     print_fn(f"Downloading via curl from:\n  {novel.url}")
-    _curl_download(novel.url, dst)
+    _curl_download(novel.url, dst, show_progress=progress_enabled)
     print_fn(f"Saved: {dst}")
     return dst
 
 
-def _curl_download(url: str, dst: Path) -> None:
-    # -L follow redirects, -f fail on non-2xx, -sS quiet but show errors
-    cmd = ["curl", "-L", "-f", "-sS", url, "-o", str(dst)]
+def _curl_download(url: str, dst: Path, *, show_progress: bool) -> None:
+    # -L follow redirects, -f fail on non-2xx
+    cmd = ["curl", "-L", "-f"]
+    if show_progress:
+        cmd.append("--progress-bar")
+    else:
+        cmd.extend(["-sS"])
+    cmd.extend([url, "-o", str(dst)])
     try:
         subprocess.run(cmd, check=True)
     except FileNotFoundError as e:
         raise RuntimeError("curl is required but was not found. Install curl or use a system that provides it.") from e
     except subprocess.CalledProcessError as e:
         raise RuntimeError(f"curl failed (exit {e.returncode}). URL: {url}") from e
-

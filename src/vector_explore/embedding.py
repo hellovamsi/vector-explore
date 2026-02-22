@@ -3,11 +3,11 @@ from __future__ import annotations
 import datetime as dt
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
 
+from .batching import batched_embed_texts
 from .embeddings.base import Embedder
 from .io_utils import iter_jsonl, write_jsonl
-from .paths import cache_ok, embed_run_dir, ensure_dir, params_fingerprint, sha256_file, sha256_bytes, write_params
+from .paths import cache_ok, embed_key, embedding_dir, ensure_dir, params_fingerprint, sha256_file, sha256_bytes, write_params
 
 
 @dataclass(frozen=True)
@@ -18,18 +18,21 @@ class EmbedParams:
 
 def embed_chunks(
     *,
-    runs_dir: Path,
+    project_root: Path,
     novel_slug: str,
     chunk_method: str,
     chunks_path: Path,
     embedder: Embedder,
+    embed_batch_size: int = 64,
+    progress_enabled: bool = True,
     print_fn=print,
 ) -> Path:
     input_sha = sha256_file(chunks_path)
     info = embedder.info()
     params = {"backend": info.backend, "model": info.model}
 
-    out_dir = embed_run_dir(runs_dir, novel_slug=novel_slug, chunk_method=chunk_method, embed_backend=info.backend, embed_model=info.model)
+    ekey = embed_key(info.backend, info.model)
+    out_dir = embedding_dir(project_root, novel_slug=novel_slug, embed_key=ekey, chunk_method=chunk_method)
     ensure_dir(out_dir)
     params_path = out_dir / "embed_params.json"
     fingerprint = params_fingerprint(input_sha, params)
@@ -39,7 +42,13 @@ def embed_chunks(
 
     rows = list(iter_jsonl(chunks_path))
     texts = [r["text"] for r in rows]
-    vectors = embedder.embed_texts(texts)
+    vectors = batched_embed_texts(
+        embedder=embedder,
+        texts=texts,
+        batch_size=embed_batch_size,
+        progress_enabled=progress_enabled,
+        description=f"Embedding chunks ({info.backend}/{info.model})",
+    )
     if len(vectors) != len(rows):
         raise RuntimeError("Embedder returned wrong number of vectors.")
     created_at = dt.datetime.utcnow().isoformat() + "Z"
@@ -67,4 +76,3 @@ def embed_chunks(
     print_fn(f"Embedded: {len(out_rows)} chunks")
     print_fn(f"Saved chunk+embeddings: {out_dir / 'embeddings.jsonl'}")
     return out_dir
-

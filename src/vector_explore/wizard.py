@@ -13,12 +13,19 @@ from .embeddings.st_embed import SentenceTransformersEmbedder
 from .indexing import IndexParams, index_embeddings
 from .io_utils import iter_jsonl
 from .paging import page_iterable, page_vector_preview, prompt_more
-from .paths import default_paths, store_run_dir
+from .paths import embed_key
 from .query import QueryParams, run_query
 from .runs_inspect import IndexedRunSummary, discover_indexed_runs
 
 
-def run_wizard(project_root: Path) -> None:
+def run_wizard(
+    project_root: Path,
+    *,
+    no_progress: bool = False,
+    embed_batch_size: int = 64,
+    index_batch_size: int = 256,
+) -> None:
+    progress_enabled = (not no_progress) and _is_tty()
     print("Read README.md Setup before running (recommended).")
     while True:
         print("")
@@ -86,41 +93,44 @@ def run_wizard(project_root: Path) -> None:
             "Semantic chunking here means: we embed consecutive sentences and cut chunks when similarity drops "
             "(educational demo)."
         )
-        semantic_embedder = _select_embedder(project_root, env, purpose="semantic chunking boundary detection")
+        semantic_embedder = _select_embedder(env, purpose="semantic chunking boundary detection")
 
     chunk_params = _prompt_chunk_params(method)
-    chunk_dir = chunk_novel(
+    chunk_out_dir = chunk_novel(
         project_root=project_root,
-        runs_dir=paths.runs_dir,
         novel_slug=novel.slug,
         novel_path=novel_path,
         method=method,
         params=chunk_params,
         semantic_embedder=semantic_embedder,
+        embed_batch_size=embed_batch_size,
+        progress_enabled=progress_enabled,
     )
 
-    chunks_path = chunk_dir / "chunks.jsonl"
+    chunks_path = chunk_out_dir / "chunks.jsonl"
     if prompt_more(input, prompt="Preview chunks now? [Enter=yes, N+Enter=no]: "):
         _preview_chunks(chunks_path)
 
     print("")
     embedder = semantic_embedder
     if embedder is None:
-        embedder = _select_embedder(project_root, env, purpose="chunk embeddings (index + query)")
+        embedder = _select_embedder(env, purpose="chunk embeddings (index + query)")
     else:
         if not prompt_more(input, prompt="Reuse the same embedding backend/model for indexing? [Enter=yes, N+Enter=no]: "):
             embedder = _select_embedder(project_root, env, purpose="chunk embeddings (index + query)")
 
-    embed_dir = embed_chunks(
-        runs_dir=paths.runs_dir,
+    embed_out_dir = embed_chunks(
+        project_root=project_root,
         novel_slug=novel.slug,
         chunk_method=method,
         chunks_path=chunks_path,
         embedder=embedder,
+        embed_batch_size=embed_batch_size,
+        progress_enabled=progress_enabled,
     )
 
-    embeddings_path = embed_dir / "embeddings.jsonl"
-    if prompt_more(input, prompt="Preview chunk→vector pairs now? [Enter=yes, N+Enter=no]: "):
+    embeddings_path = embed_out_dir / "embeddings.jsonl"
+    if prompt_more(input, prompt="Preview chunk->vector pairs now? [Enter=yes, N+Enter=no]: "):
         _preview_embeddings(embeddings_path)
 
     print("")
@@ -130,7 +140,6 @@ def run_wizard(project_root: Path) -> None:
     print("  3) Pinecone (cloud + .env)")
     store_choice = _prompt_choice("Select [1-3] [default: 1]: ", 1, 3, default=1)
     store = {1: "lancedb", 2: "qdrant", 3: "pinecone"}[store_choice]
-    store_name = store
 
     table_or_collection = "chunks"
     namespace = None
@@ -141,19 +150,18 @@ def run_wizard(project_root: Path) -> None:
         namespace = f"{novel.slug}-{method}-{embedder.info().backend}"
         print("Pinecone: ensure PINECONE_API_KEY and PINECONE_INDEX are set in .env.")
 
-    store_dir = store_run_dir(
-        paths.runs_dir,
+    ekey = embed_key(embedder.info().backend, embedder.info().model)
+    index_embeddings(
+        project_root=project_root,
         novel_slug=novel.slug,
         chunk_method=method,
-        embed_backend=embedder.info().backend,
-        embed_model=embedder.info().model,
-        store_name=store_name,
-    )
-    index_embeddings(
+        embed_key_value=ekey,
+        store_name=store,
         embeddings_path=embeddings_path,
-        store_dir=store_dir,
         params=IndexParams(store=store, table_or_collection=table_or_collection, namespace=namespace),
         env=env,
+        index_batch_size=index_batch_size,
+        progress_enabled=progress_enabled,
     )
 
     run_query_stage(
@@ -376,7 +384,7 @@ def _prompt_chunk_params(method: str) -> dict:
     raise ValueError(method)
 
 
-def _select_embedder(project_root: Path, env, *, purpose: str):
+def _select_embedder(env, *, purpose: str):
     print("")
     print(f"Choose an embedding backend for {purpose}:")
     print("  1) Ollama embeddings (local; uses installed embedding models; no pulling)")
@@ -400,7 +408,6 @@ def _select_embedder(project_root: Path, env, *, purpose: str):
             raise RuntimeError("Cancelled SentenceTransformers selection.")
         return SentenceTransformersEmbedder(model_name=model)
 
-    # Cloud
     if not env.openai_base_url or not env.openai_api_key or not env.openai_embed_model:
         raise RuntimeError("Cloud embeddings require OPENAI_BASE_URL, OPENAI_API_KEY, OPENAI_EMBED_MODEL in .env.")
     try:
@@ -464,15 +471,21 @@ def _preview_chunks(chunks_path: Path) -> None:
     for r in iter_jsonl(chunks_path):
         cid = r["chunk_id"]
         txt = (r["text"] or "").strip().replace("\n", " ")
-        lines.append(f"[{cid}] {txt[:400]}" + ("…" if len(txt) > 400 else ""))
+        lines.append(f"[{cid}] {txt[:400]}" + ("..." if len(txt) > 400 else ""))
     page_iterable(lines, page_size=3, input_fn=input, print_fn=print, header=f"Preview: {chunks_path}")
 
 
 def _preview_embeddings(embeddings_path: Path) -> None:
     for r in iter_jsonl(embeddings_path):
         print(f"Chunk: {r['chunk_id']}")
-        print((r["text"] or "")[:200].replace("\n", " ") + ("…" if len(r["text"] or '') > 200 else ""))
+        print((r["text"] or "")[:200].replace("\n", " ") + ("..." if len(r["text"] or "") > 200 else ""))
         vec = r["embedding"]
         page_vector_preview(vec, input_fn=input, print_fn=print, label="chunk_vector")
         if not prompt_more(input, prompt="Next chunk? [Enter=yes, N+Enter=no]: "):
             break
+
+
+def _is_tty() -> bool:
+    import sys
+
+    return bool(getattr(sys.stdout, "isatty", lambda: False)())
